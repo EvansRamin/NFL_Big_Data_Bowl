@@ -1,89 +1,91 @@
-# Architecture du code
+# Code architecture
 
-## Flux de données
+## Data flow
 
 ```
 data/*.csv ──► load.load_all() ──► dict t {games, plays, players, pffScoutingData, tracking}
                     │ (cache/tracking.parquet)
                     ▼
-            metrics.build_table(t) ──► tab   (1 ligne / action)   → cache/cpt_table.parquet
-                                   └─► duels (1 ligne / rusher·action) → cache/duels.parquet
+            metrics.build_table(t) ──► tab   (1 row / play)          → cache/cpt_table.parquet
+                                   └─► duels (1 row / rusher·play)   → cache/duels.parquet
                     │
         ┌───────────┼──────────────┬────────────────────┐
         ▼           ▼              ▼                    ▼
  validate.run   viz.make_all   app.py (Streamlit)   export_html.main
- outputs/       outputs/*.png   lit cache/            outputs/pocket_clock_dashboard.html
+ outputs/       outputs/*.png   reads cache/          outputs/pocket_clock_dashboard.html
  validation_*   ranking_*.csv
 ```
 
-`run_all.py` enchaîne `load` → `metrics` → `validate` → `viz`. Le dashboard et l'export HTML ne recalculent rien : ils lisent les parquet dans `cache/`.
+`run_all.py` chains `load` → `metrics` → `validate` → `viz`. The dashboard and the HTML export recompute nothing: they read the parquet files in `cache/`.
 
 ## Modules
 
-### `src/load.py` : chargement
+### `src/load.py`: loading
 
-| Élément | Description |
+| Item | Description |
 |---|---|
-| `FPS = 10` | Nombre d'images par seconde du tracking |
-| `DEBUG` | Activé par la variable d'environnement `DEBUG=1` : seuls les 5 premiers matchs sont chargés et le cache s'appelle `tracking_debug.parquet` |
-| `SNAP_EVENTS`, `THROW_EVENTS`, `END_EVENTS` | Événements qui marquent le début et la fin de la fenêtre d'analyse |
-| `load_tables()` | Charge games, plays, players et pffScoutingData |
-| `normalize_direction(df)` | Fait aller l'attaque vers la droite |
-| `load_tracking(force=False)` | Lit tous les matchs, ne garde que [snap, fin] et ajoute `snap_frame`, `end_frame` et `t` (secondes depuis le snap). Le résultat est mis en cache. `force=True` reconstruit le cache |
-| `load_all(force=False)` | Renvoie le dict des tables plus `tracking` |
+| `FPS = 10` | Tracking frames per second |
+| `DEBUG` | Enabled with the `DEBUG=1` environment variable: only the first 5 games are loaded and the cache is named `tracking_debug.parquet` |
+| `SNAP_EVENTS`, `THROW_EVENTS`, `END_EVENTS` | Events that mark the start and end of the analysis window |
+| `load_tables()` | Loads games, plays, players and pffScoutingData |
+| `normalize_direction(df)` | Makes the offense move to the right |
+| `load_tracking(force=False)` | Reads every game, keeps only [snap, end] and adds `snap_frame`, `end_frame` and `t` (seconds since the snap). The result is cached. `force=True` rebuilds the cache |
+| `load_all(force=False)` | Returns the dict of tables plus `tracking` |
 
-### `src/metrics.py` : calcul du CPT
+### `src/metrics.py`: CPT computation
 
-| Élément | Description |
+| Item | Description |
 |---|---|
-| `PRESSURE_RADIUS = 2.0` | Rayon de pression en yards |
-| `ROBUSTNESS_RADII` | Rayons supplémentaires (1,5, 2, 3) calculés dans les colonnes `cpt_<r>` |
-| `build_distances(t)` | Une ligne par (action, frame, rusher) avec la distance au QB |
-| `rusher_entries(d, radius)` | Par (action, rusher) : instant (`entry_t`) et vitesse (`entry_speed`) de la 1re entrée dans le rayon |
-| `play_cpt(d, radius)` | Par action : `cpt`, `censored`, `duration`, premier rusher |
-| `build_table(t, radius)` | Renvoie `(tab, duels, skipped)`. Ajoute le contexte de jeu, le nombre de rushers et de bloqueurs, le flag de pression PFF, les noms du QB et du rusher, et le bloqueur du premier rusher |
+| `PRESSURE_RADIUS = 2.0` | Pressure radius in yards |
+| `ROBUSTNESS_RADII` | Extra radii (1.5, 2, 3) computed into the `cpt_<r>` columns |
+| `build_distances(t)` | One row per (play, frame, rusher) with the distance to the QB |
+| `rusher_entries(d, radius)` | Per (play, rusher): time (`entry_t`) and speed (`entry_speed`) of the first entry into the radius |
+| `play_cpt(d, radius)` | Per play: `cpt`, `censored`, `duration`, first rusher |
+| `build_table(t, radius)` | Returns `(tab, duels, skipped)`. Adds game context, rusher and blocker counts, the PFF pressure flag, QB and rusher names, and the first rusher's blocker |
 
-### `src/analysis.py` : statistiques
+### `src/analysis.py`: statistics
 
-| Élément | Description |
+| Item | Description |
 |---|---|
-| `HORIZON = 3.0` | Horizon du RMST, en secondes |
-| `MIN_PLAYS = 60` | Nombre minimal d'actions pour classer une équipe |
-| `km(df, cpt="cpt")` | Ajuste un Kaplan-Meier. Avec une colonne `cpt_<r>`, l'événement est `cpt < duration` |
-| `rmst(df, horizon)` | Aire sous la courbe KM |
-| `clean_at(df, t)` | Survie KM à l'instant t |
-| `team_ranking(tab, by)` | Classement par équipe (`by` vaut `possessionTeam` ou `defensiveTeam`) |
-| `expected_rmst(tab)` | RMST attendu par action, avec le modèle de Cox |
-| `team_over_expected(tab)` | RMST réel moins attendu, par équipe |
-| `rusher_ranking(duels, min_rushes=150)` | Classement des rushers |
-| `blocker_ranking(duels, min_duels=80)` | Classement des bloqueurs |
+| `HORIZON = 3.0` | RMST horizon, in seconds |
+| `MIN_PLAYS = 60` | Minimum number of plays to rank a team |
+| `km(df, cpt="cpt")` | Fits a Kaplan-Meier. With a `cpt_<r>` column, the event is `cpt < duration` |
+| `rmst(df, horizon)` | Area under the KM curve |
+| `clean_at(df, t)` | KM survival at time t |
+| `team_ranking(tab, by)` | Team ranking (`by` is `possessionTeam` or `defensiveTeam`) |
+| `expected_rmst(tab)` | Expected RMST per play, from the Cox model |
+| `team_over_expected(tab)` | Actual minus expected RMST, per team |
+| `rusher_ranking(duels, min_rushes=150)` | Rusher ranking |
+| `blocker_ranking(duels, min_duels=80)` | Blocker ranking |
 
-### `src/validate.py` : validation
+### `src/validate.py`: validation
 
-`run(tab)` compare le RMST et le % propre à 2,5 s selon le résultat, le nombre de rushers, le play action et la couverture. Il calcule aussi l'accord avec PFF et le taux de complétion par tranche de CPT. Tout est affiché et écrit dans `outputs/validation_*.csv`.
+`run(tab)` compares RMST and % clean at 2.5 s by result, number of rushers, play action and coverage. It also computes agreement with PFF and the completion rate per CPT bucket. Everything is printed and written to `outputs/validation_*.csv`.
 
-### `src/viz.py` : figures statiques
+### `src/viz.py`: static figures
 
-`make_all(t, tab, duels)` produit les PNG `01` à `07`, le GIF `08` et les CSV de classement. `animate()` dessine le terrain, les joueurs et le cercle de 2 yd autour du QB, qui devient rouge quand la poche est rompue.
+`make_all(t, tab, duels)` produces PNGs `01` to `07`, GIF `08` and the ranking CSVs. `animate()` draws the field, the players and the 2 yd circle around the QB, which turns red when the pocket breaks.
 
-### `src/replay.py` : rejeu interactif
+### `src/replay.py`: interactive replay
 
-`play_figure(trk, pff, gameId, playId)` renvoie une figure Plotly animée, avec un curseur temporel et un bouton de lecture. Elle est utilisée par `app.py` et `export_html.py`.
+`play_figure(trk, pff, gameId, playId)` returns an animated Plotly figure with a time slider and a play button. It is used by `app.py` and `export_html.py`.
 
-### `app.py` : dashboard Streamlit
+### `src/theme.py`: visual identity
 
-La barre latérale propose deux profils, coach offensif ou défensif, et le choix de l'équipe. La page affiche :
-- des indicateurs : RMST, % propre à 2,5 s et nombre d'actions, avec l'écart à la moyenne NFL ;
-- l'horloge de la poche de l'équipe comparée à la NFL ;
-- les bloqueurs les plus battus ou les meilleurs rushers, selon le profil ;
-- le rejeu des 40 actions où la poche a craqué le plus vite.
+Design tokens (dark surfaces, a single amber accent, Archivo for headings and Inter for body text) taken from the mockup in `design/`. It also provides HTML helpers (`page_header`, `kpi`, `card_title`, `brand`) shared by the Streamlit app and the HTML export. Fonts are served from `static/fonts` through Streamlit's static file serving.
 
-## Modifier les paramètres
+### `app.py`: Streamlit dashboard
 
-| Pour… | Modifier |
+The sidebar offers two points of view (offensive or defensive coach), a team picker and an optional comparison team. The page shows:
+- KPIs: RMST, % clean at 2.5 s, league rank and number of plays, each compared with the NFL average;
+- tabs: **Pocket clock** (team curve vs NFL), **League** (rankings), **Players** (most-beaten blockers or best rushers depending on the point of view), **Replay** (the 40 plays where the pocket broke fastest) and **Method**.
+
+## Changing parameters
+
+| To… | Change |
 |---|---|
-| Changer le rayon de pression | `metrics.PRESSURE_RADIUS`, puis relancer `run_all.py` (le cache du tracking reste valide) |
-| Changer l'horizon du RMST | `analysis.HORIZON` |
-| Changer les seuils de classement | `analysis.MIN_PLAYS` et les arguments `min_rushes` / `min_duels` |
-| Reconstruire le cache du tracking | Supprimer `cache/tracking.parquet` ou appeler `load_all(force=True)` |
-| Tester rapidement | `DEBUG=1` |
+| Change the pressure radius | `metrics.PRESSURE_RADIUS`, then rerun `run_all.py` (the tracking cache stays valid) |
+| Change the RMST horizon | `analysis.HORIZON` |
+| Change ranking thresholds | `analysis.MIN_PLAYS` and the `min_rushes` / `min_duels` arguments |
+| Rebuild the tracking cache | Delete `cache/tracking.parquet` or call `load_all(force=True)` |
+| Test quickly | `DEBUG=1` |
