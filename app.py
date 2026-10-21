@@ -22,8 +22,9 @@ GROUPS = (("4 or fewer rushers", lambda n: n <= 4), ("5 rushers", lambda n: n ==
 def data():
     tab = pd.read_parquet(CACHE_DIR / "cpt_table.parquet")
     duels = pd.read_parquet(CACHE_DIR / "duels.parquet")
-    pff = load_tables()["pffScoutingData"]
-    return tab, duels, pff
+    tables = load_tables()
+    names = dict(zip(tables["players"].nflId, tables["players"].displayName))
+    return tab, duels, tables["pffScoutingData"], names
 
 
 @st.cache_data
@@ -54,21 +55,37 @@ def card(key, title, caption=""):
     return box
 
 
-tab, duels, pff = data()
+tab, duels, pff, names = data()
 ol_rk, dr_rk = rankings(tab)
 teams = sorted(tab.possessionTeam.unique())
 
 # ---------------------------------------------------------------- sidebar
+qp = st.query_params     # shareable links: ?mode=off|def&team=KC&compare=BUF
+if "mode" not in st.session_state and qp.get("mode") in ("off", "def"):
+    st.session_state["mode"] = "Offensive coach" if qp["mode"] == "off" else "Defensive coach"
+st.session_state.setdefault("team", qp["team"] if qp.get("team") in teams else ("KC" if "KC" in teams else teams[0]))
+if "compare" not in st.session_state and qp.get("compare") in teams:
+    st.session_state["compare"] = qp["compare"]
+team_label = lambda c: f"{T.TEAM_NAMES.get(c, c)} ({c})"   # noqa: E731
+
 with st.sidebar:
     st.markdown(T.brand(), unsafe_allow_html=True)
     st.markdown('<div class="side-label">Point of view</div>', unsafe_allow_html=True)
     mode = st.radio("Point of view", ["Offensive coach", "Defensive coach"], label_visibility="collapsed", key="mode")
     off = mode == "Offensive coach"
     st.markdown('<div class="side-label">Team</div>', unsafe_allow_html=True)
-    team = st.selectbox("Team", teams, index=teams.index("KC") if "KC" in teams else 0,
-                        format_func=lambda c: f"{T.TEAM_NAMES.get(c, c)} ({c})", label_visibility="collapsed", key="team")
+    team = st.selectbox("Team", teams, format_func=team_label, label_visibility="collapsed", key="team")
+    st.markdown('<div class="side-label">Compare with</div>', unsafe_allow_html=True)
+    cmp_team = st.selectbox("Compare with", [None] + teams, format_func=lambda c: "No comparison" if c is None else team_label(c),
+                            label_visibility="collapsed", key="compare")
+    if cmp_team == team:
+        cmp_team = None
     st.markdown(f'<dl class="facts"><dt>Season</dt><dd>2021, weeks 1–8</dd><dt>Plays</dt><dd>{len(tab):,}</dd>'
                 '<dt>Threshold</dt><dd>Rusher &lt; 2 yd</dd></dl>', unsafe_allow_html=True)
+
+url_params = {"mode": "off" if off else "def", "team": team, **({"compare": cmp_team} if cmp_team else {})}
+if dict(st.query_params) != url_params:
+    st.query_params.from_dict(url_params)
 
 col = "possessionTeam" if off else "defensiveTeam"
 rk = ol_rk if off else dr_rk
@@ -135,6 +152,10 @@ with t_clock:
         fig.add_scatter(x=kn.index, y=kn.iloc[:, 0] * 100, mode="lines", name="NFL average", line=dict(shape="hv", width=2, color=T.REF, dash="dash"))
         fig.add_scatter(x=sf.index, y=sf.iloc[:, 0] * 100, mode="lines", name=team, line=dict(shape="hv", width=3, color=T.ACCENT),
                         hovertemplate="%{x:.1f} s · %{y:.0f}% clean<extra>" + team + "</extra>")
+        if cmp_team:
+            sc_ = A.km(tab[tab[col] == cmp_team]).survival_function_
+            fig.add_scatter(x=sc_.index, y=sc_.iloc[:, 0] * 100, mode="lines", name=cmp_team, line=dict(shape="hv", width=3, color=T.SEQ[3]),
+                            hovertemplate="%{x:.1f} s · %{y:.0f}% clean<extra>" + cmp_team + "</extra>")
         fig.add_vline(x=2.5, line=dict(color=T.SUBTLE, dash="dot", width=1), annotation_text="2.5 s", annotation_font_color=T.MUTED)
         fig.update_layout(xaxis_title="seconds since the snap", yaxis_title="% of pockets still clean", yaxis_range=[40, 100.5],
                           xaxis_range=[0, 4.5], height=380, hovermode="x unified")
@@ -149,6 +170,10 @@ with t_clock:
         bar = go.Figure()
         bar.add_bar(x=labels, y=[r[2] * 100 for r in rows], name=team, marker_color=T.ACCENT,
                     text=[f"{r[2]:.0%}" if r[2] == r[2] else "n/a" for r in rows], textposition="outside", textfont=dict(color=T.ACCENT))
+        if cmp_team:
+            cm_rows = [A.clean_at(tab[(tab[col] == cmp_team) & rule(tab.n_rushers)], 2.5) for _, rule in GROUPS]
+            bar.add_bar(x=labels, y=[v * 100 for v in cm_rows], name=cmp_team, marker_color=T.SEQ[3],
+                        text=[f"{v:.0%}" for v in cm_rows], textposition="outside", textfont=dict(color=T.SEQ[3]))
         bar.add_bar(x=labels, y=[r[3] * 100 for r in rows], name="NFL average", marker=dict(color=T.SURFACE_2, line=dict(color=T.REF, width=1.5)),
                     text=[f"{r[3]:.0%}" for r in rows], textposition="outside", textfont=dict(color=T.REF))
         bar.update_layout(barmode="group", yaxis=dict(range=[0, 112], title="% clean at 2.5 s"), height=320, bargap=.35)
@@ -201,6 +226,7 @@ with t_league:
     fig.update_layout(height=860, xaxis=dict(range=[-m, m], title="gap vs NFL average, seconds"), bargap=.25, margin=dict(l=10, r=40, t=10, b=10))
     c.plotly_chart(fig, width="stretch", theme=None)
     c.markdown('<p class="note">▶ = selected team</p>', unsafe_allow_html=True)
+    c.download_button("Download ranking (CSV)", rk.to_csv(index=False), file_name=f"ranking_{'offense' if off else 'defense'}.csv", mime="text/csv")
 
     if off:
         o = A.team_over_expected(tab).sort_values("over_expected")
@@ -227,6 +253,7 @@ with t_players:
                              column_config={"blocker": "Player", "blocker_pos": "Pos", "duels": "Duels",
                                             "beaten_rate": st.column_config.ProgressColumn("Beaten", format="%.0f%%", min_value=0, max_value=100),
                                             "mean_entry_t": st.column_config.NumberColumn("Avg arrival (s)", format="%.2f")})
+                cb.download_button("Download (CSV)", bk.to_csv(index=False), file_name=f"blockers_{team}.csv", mime="text/csv")
         rr = A.rusher_ranking(duels[duels.possessionTeam == team], min_rushes=15)
         rtitle, rcap = "Most dangerous opposing rushers", "Rushers who reached the QB most often against this offense. Min. 15 rushes."
     else:
@@ -242,6 +269,7 @@ with t_players:
                          column_config={"rusher": "Rusher", "rushes": "Rushes", "wins": "First",
                                         "reach_rate": st.column_config.ProgressColumn("Reached QB", format="%.0f%%", min_value=0, max_value=40),
                                         "entry_speed": st.column_config.NumberColumn("yd/s", format="%.1f")})
+            cr.download_button("Download (CSV)", rr.to_csv(index=False), file_name=f"rushers_{team}.csv", mime="text/csv")
 
     top = A.rusher_ranking(duels, min_rushes=150).head(15).iloc[::-1]
     ct = card("top15", "Top 15 pass rushers, NFL", "Bar = times first to break the pocket. Label = times first · mean seconds to break it. Min. 150 rushes.")
@@ -263,7 +291,7 @@ with t_replay:
     if opt:
         k_ = cp.selectbox("Plays where the pocket broke (fastest first)", list(opt), key=f"replay_{col}_{team}")
         gid, pid = opt[k_]
-        cp.plotly_chart(play_figure(tracking_for(gid), pff, int(gid), int(pid), title=k_), width="stretch", theme=None)
+        cp.plotly_chart(play_figure(tracking_for(gid), pff, int(gid), int(pid), title=k_, names=names), width="stretch", theme=None)
     else:
         cp.info("No broken-pocket play for this selection.")
 
