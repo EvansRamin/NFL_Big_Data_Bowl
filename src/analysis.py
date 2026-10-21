@@ -1,4 +1,4 @@
-"""Statistiques sur le CPT : courbes de survie (Kaplan-Meier), RMST, classements, CPT attendu (Cox)."""
+"""Statistics on the CPT: survival curves (Kaplan-Meier), RMST, rankings, expected CPT (Cox)."""
 import warnings
 
 import numpy as np
@@ -6,29 +6,29 @@ import pandas as pd
 from lifelines import CoxPHFitter, KaplanMeierFitter
 
 warnings.filterwarnings("ignore")
-HORIZON = 3.0   # s : fenêtre sur laquelle on mesure la "poche propre" (RMST)
-MIN_PLAYS = 60  # actions min pour classer une équipe / 25 pour un rusher
+HORIZON = 3.0   # s: window over which the "clean pocket" is measured (RMST)
+MIN_PLAYS = 60  # minimum plays to rank a team
 
 
 def km(df: pd.DataFrame, cpt="cpt") -> KaplanMeierFitter:
-    """KM : événement = pression (non censuré). Gère proprement les actions censurées."""
+    """KM: event = pressure (uncensored). Handles censored plays properly."""
     return KaplanMeierFitter().fit(df[cpt], event_observed=~df["censored"] if cpt == "cpt" else df[cpt] < df["duration"])
 
 
 def rmst(df: pd.DataFrame, horizon: float = HORIZON, cpt="cpt") -> float:
-    """Temps moyen de poche propre sur [0, horizon] = aire sous la courbe KM (secondes)."""
+    """Mean clean-pocket time over [0, horizon] = area under the KM curve (seconds)."""
     k = km(df, cpt)
     grid = np.linspace(0, horizon, 301)
     return float(np.trapezoid(k.survival_function_at_times(grid).to_numpy(), grid))
 
 
 def clean_at(df: pd.DataFrame, t: float, cpt="cpt") -> float:
-    """% de poches encore propres à t secondes (KM)."""
+    """Share of pockets still clean at t seconds (KM)."""
     return float(km(df, cpt).survival_function_at_times([t]).iloc[0])
 
 
 def team_ranking(tab: pd.DataFrame, by: str, cpt="cpt", min_plays=MIN_PLAYS) -> pd.DataFrame:
-    """RMST + % propre à 2.5 s par équipe ('possessionTeam' = OL, 'defensiveTeam' = pass rush)."""
+    """RMST + % clean at 2.5 s per team ('possessionTeam' = OL, 'defensiveTeam' = pass rush)."""
     rows = []
     for team, g in tab.groupby(by):
         if len(g) >= min_plays:
@@ -39,7 +39,7 @@ def team_ranking(tab: pd.DataFrame, by: str, cpt="cpt", min_plays=MIN_PLAYS) -> 
     return out
 
 
-# ---------- CPT attendu (bonus) : Cox sur le contexte ----------
+# ---------- Expected CPT (bonus): Cox on the play context ----------
 def _features(tab: pd.DataFrame) -> pd.DataFrame:
     f = pd.DataFrame(index=tab.index)
     f["n_rushers"] = tab.n_rushers.astype(float)
@@ -53,7 +53,7 @@ def _features(tab: pd.DataFrame) -> pd.DataFrame:
 
 
 def expected_rmst(tab: pd.DataFrame, horizon: float = HORIZON, cpt="cpt") -> pd.Series:
-    """RMST attendu par action selon le contexte (nb de rushers, PA, down, distance, formation, couverture)."""
+    """Expected RMST per play given context (rusher count, play action, down, distance, formation, coverage)."""
     f = _features(tab)
     d = f.assign(T=tab[cpt].clip(lower=0.05), E=(~tab.censored).astype(int)) if cpt == "cpt" else \
         f.assign(T=tab[cpt].clip(lower=0.05), E=(tab[cpt] < tab.duration).astype(int))
@@ -67,7 +67,7 @@ def expected_rmst(tab: pd.DataFrame, horizon: float = HORIZON, cpt="cpt") -> pd.
 
 
 def team_over_expected(tab: pd.DataFrame, by="possessionTeam", min_plays=MIN_PLAYS) -> pd.DataFrame:
-    """RMST réel - attendu par équipe (la valeur ajoutée de la ligne, indépendante du schéma)."""
+    """Actual - expected RMST per team (the line's added value, independent of scheme)."""
     t = tab.copy()
     t["exp_rmst"] = expected_rmst(t)
     rows = []
@@ -80,7 +80,7 @@ def team_over_expected(tab: pd.DataFrame, by="possessionTeam", min_plays=MIN_PLA
 
 
 def rusher_ranking(duels: pd.DataFrame, min_rushes=150) -> pd.DataFrame:
-    """Rushers : % de victoires (1er à entrer), CPT moyen quand 1er, nb de rushs, vitesse d'entrée."""
+    """Rushers: win rate (first to enter), mean CPT when first, rush count, entry speed."""
     g = duels.groupby(["rusherId", "rusher"])
     out = g.agg(rushes=("rusherId", "size"), wins=("won_first", "sum"),
                 reach_rate=("entry_t", lambda s: s.notna().mean()),
@@ -92,7 +92,7 @@ def rusher_ranking(duels: pd.DataFrame, min_rushes=150) -> pd.DataFrame:
 
 
 def blocker_ranking(duels: pd.DataFrame, min_duels=80) -> pd.DataFrame:
-    """Bloqueurs : % de duels où le rusher assigné franchit le rayon (et à quelle vitesse en moyenne)."""
+    """Blockers: share of duels where the assigned rusher crosses the radius (and mean entry time)."""
     d = duels.dropna(subset=["blockerId"])
     out = d.groupby(["blockerId", "blocker", "blocker_pos"]).agg(
         duels=("rusherId", "size"), beaten_rate=("entry_t", lambda s: s.notna().mean()),

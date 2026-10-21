@@ -1,6 +1,0 @@
-,0
-P(CPT<fin | PFF pression),0.6890415235716516
-P(CPT<fin | pas de PFF),0.09945580784387315
-precision (PFF | nous),0.8063573255389113
-rappel (nous | PFF),0.6890415235716516
-corrélation φ,0.6116234999683192

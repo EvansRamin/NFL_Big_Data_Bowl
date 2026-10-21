@@ -1,4 +1,4 @@
-"""Pipeline complet : chargement -> CPT -> validation -> figures.   python run_all.py   (DEBUG=1 pour tester)"""
+"""Full pipeline: loading -> CPT -> validation -> figures.   python run_all.py   (DEBUG=1 to test)"""
 import pandas as pd
 from src import load, metrics, validate, viz
 

@@ -1,4 +1,4 @@
-# ⏱️ Pocket Clock — combien de temps le QB a-t-il vraiment ?
+# ⏱️ Pocket Clock — how much time does the QB really have?
 
 Nous avons inventé le **Clean Pocket Time (CPT)** : le nombre de secondes entre le snap et le moment où un pass rusher arrive à moins de 2 yards du QB. Il est calculé directement depuis le tracking des 8 532 passes de la saison NFL 2021 (semaines 1-8). Les actions où personne n'arrive sont traitées comme « censurées » (Kaplan-Meier) au lieu d'être jetées.
 
@@ -13,8 +13,8 @@ Nous avons inventé le **Clean Pocket Time (CPT)** : le nombre de secondes entre
 - **Recruteur** : comparer les bloqueurs et les rushers sur une mesure objective.
 - **Commentateur** : afficher l'« horloge de la poche » à l'antenne.
 
-![classement](outputs/01_classement_lignes_offensives.png)
-![horloge](outputs/04_horloge_poche_par_rushers.png)
+![ranking](outputs/01_offensive_line_ranking.png)
+![clock](outputs/04_pocket_clock_by_rushers.png)
 
 ---
 
