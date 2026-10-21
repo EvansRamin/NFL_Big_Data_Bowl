@@ -1,0 +1,9 @@
+pandas
+numpy
+matplotlib
+plotly
+tqdm
+pyarrow
+lifelines
+streamlit
+pillow
